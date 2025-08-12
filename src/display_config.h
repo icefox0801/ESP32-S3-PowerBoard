@@ -1,7 +1,7 @@
 /**
  * @file display_config.h
  * @brief Display configuration for ESP32-S3 PowerBoard 5.0" RGB Parallel Display
- * 
+ *
  * Pin definitions and display settings based on the official ESP32-S3 PowerBoard
  * RGB parallel interface specifications.
  */
@@ -22,7 +22,7 @@
 // Control signals
 #define TFT_DE    40    // Data Enable
 #define TFT_VSYNC 41    // Vertical Sync
-#define TFT_HSYNC 39    // Horizontal Sync  
+#define TFT_HSYNC 39    // Horizontal Sync
 #define TFT_PCLK  42    // Pixel Clock
 
 // RGB Data Lines (5-6-5 bit configuration)
