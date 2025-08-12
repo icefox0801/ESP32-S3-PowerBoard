@@ -12,7 +12,7 @@ void timer_callback(lv_timer_t *timer);
 static lv_obj_t *timer_label = nullptr;
 static int timer_seconds = 0;
 
-// Create RGB Panel databus and display using the configuration
+// Create RGB Panel databus and display optimized for anti-tearing
 Arduino_ESP32RGBPanel *rgbBus = new Arduino_ESP32RGBPanel(
     TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK,
     TFT_R0, TFT_R1, TFT_R2, TFT_R3, TFT_R4,
@@ -20,12 +20,11 @@ Arduino_ESP32RGBPanel *rgbBus = new Arduino_ESP32RGBPanel(
     TFT_B0, TFT_B1, TFT_B2, TFT_B3, TFT_B4,
     HSYNC_POLARITY, HSYNC_FRONT_PORCH, HSYNC_PULSE_WIDTH, HSYNC_BACK_PORCH,
     VSYNC_POLARITY, VSYNC_FRONT_PORCH, VSYNC_PULSE_WIDTH, VSYNC_BACK_PORCH,
-    PCLK_ACTIVE_NEG, PREFER_SPEED, true /* auto_flush */
+    PCLK_ACTIVE_NEG, PREFER_SPEED, false /* auto_flush disabled for precise timing control */
 );
 Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
-    PANEL_WIDTH, PANEL_HEIGHT, rgbBus, 0 /* rotation */, true /* auto_flush */
+    PANEL_WIDTH, PANEL_HEIGHT, rgbBus, 0 /* rotation */, false /* auto_flush disabled for manual control */
 );
-;
 
 // LVGL display buffer - allocated dynamically from SPIRAM
 static lv_color_t *disp_draw_buf1 = nullptr; // Primary buffer
@@ -39,73 +38,44 @@ uint32_t my_tick_function(void)
   return millis();
 }
 
-// LVGL display flush callback for RGB parallel
+// LVGL display flush callback with RGB conversion
 void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p)
 {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
-
-  // Reduce debug output frequency to minimize performance impact with larger buffers
-  static int flush_count = 0;
-  if (flush_count++ % 500 == 0)
-  {
-    Serial.printf("Flush #%d: x1=%d, y1=%d, x2=%d, y2=%d, w=%d, h=%d\n",
-                  flush_count, area->x1, area->y1, area->x2, area->y2, w, h);
-  }
-
-  // LVGL v9+ with LV_COLOR_DEPTH 24 uses RGB888 format (3 bytes per pixel)
-  // Convert RGB888 to RGB565 for the RGB parallel interface
   uint32_t pixel_count = w * h;
 
-  // Use MALLOC_CAP_DMA for better performance with larger buffers
-  uint16_t *rgb565_buffer = (uint16_t *)heap_caps_malloc(pixel_count * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-
+  // Allocate RGB565 buffer for conversion
+  uint16_t *rgb565_buffer = (uint16_t *)malloc(pixel_count * sizeof(uint16_t));
   if (!rgb565_buffer)
   {
-    // Fallback to regular malloc if DMA allocation fails
-    rgb565_buffer = (uint16_t *)malloc(pixel_count * sizeof(uint16_t));
-  }
-
-  if (!rgb565_buffer)
-  {
-    Serial.printf("ERROR: Failed to allocate RGB565 buffer for %d pixels!\n", pixel_count);
     lv_display_flush_ready(disp);
     return;
   }
 
+  // Convert RGB888 to RGB565 - try BGR order since colors are swapped
   uint8_t *rgb888 = color_p;
-  // Optimized conversion loop for better performance with larger buffers
   for (uint32_t i = 0; i < pixel_count; i++)
   {
-    // Convert RGB888 to RGB565 with high precision for font rendering
-    // Use standard RGB order for correct color representation
-    uint8_t r = rgb888[i * 3 + 0]; // Red
-    uint8_t g = rgb888[i * 3 + 1]; // Green
-    uint8_t b = rgb888[i * 3 + 2]; // Blue
+    uint8_t b = rgb888[i * 3];     // Blue channel (swapped from red)
+    uint8_t g = rgb888[i * 3 + 1]; // Green channel
+    uint8_t r = rgb888[i * 3 + 2]; // Red channel (swapped from blue)
 
-    // High-precision conversion for maximum clarity
-    // Use rounding for best color accuracy with larger display areas
-    uint16_t r5 = (r * 31 + 127) / 255; // Precise 5-bit conversion
-    uint16_t g6 = (g * 63 + 127) / 255; // Precise 6-bit conversion
-    uint16_t b5 = (b * 31 + 127) / 255; // Precise 5-bit conversion
+    // Convert to RGB565 format: RRRRRGGGGGGBBBBB
+    uint16_t r5 = (r >> 3) & 0x1F; // 5-bit red
+    uint16_t g6 = (g >> 2) & 0x3F; // 6-bit green
+    uint16_t b5 = (b >> 3) & 0x1F; // 5-bit blue
 
     rgb565_buffer[i] = (r5 << 11) | (g6 << 5) | b5;
   }
 
-  // Send to display with larger buffer chunks
+  // Send to display using 16-bit bitmap
   gfx->draw16bitRGBBitmap(area->x1, area->y1, rgb565_buffer, w, h);
 
-  // Free the temporary buffer efficiently
-  if (heap_caps_get_allocated_size(rgb565_buffer) > 0)
-  {
-    heap_caps_free(rgb565_buffer);
-  }
-  else
-  {
-    free(rgb565_buffer);
-  }
+  // Free the temporary buffer
+  free(rgb565_buffer);
 
-  // Tell LVGL that flushing is done
+  // Signal completion to LVGL
   lv_display_flush_ready(disp);
 }
 
@@ -121,14 +91,14 @@ void timer_callback(lv_timer_t *timer)
     int hours = timer_seconds / 3600;
     int minutes = (timer_seconds % 3600) / 60;
     int seconds = timer_seconds % 60;
+    int milliseconds = (timer_seconds % 1) * 1000;
 
-    sprintf(time_str, "Timer: %02d:%02d:%02d", hours, minutes, seconds);
+    sprintf(time_str, "Timer: %02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds);
 
-    // Use LVGL's efficient text update - only invalidates the label area
+    // Use LVGL's efficient text update
     lv_label_set_text(timer_label, time_str);
 
-    // Optional: Force only the label area to be redrawn to minimize flickering
-    lv_obj_invalidate(timer_label);
+    // Let LVGL handle refresh naturally - don't force invalidation to reduce flickering
   }
 }
 
@@ -164,38 +134,26 @@ void setup()
 
   Serial.println("Display test complete!");
 
-  // Allocate LVGL buffers from SPIRAM - with double buffering for smooth updates
+  // Allocate LVGL buffer from internal RAM - eliminates SPI bus conflicts completely
   size_t buffer_size = LVGL_BUFFER_SIZE * sizeof(lv_color_t);
-  disp_draw_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  disp_draw_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (!disp_draw_buf1)
   {
-    Serial.println("Failed to allocate display buffer 1 from SPIRAM, trying internal RAM...");
+    Serial.println("Failed to allocate display buffer from internal RAM, trying regular malloc...");
     disp_draw_buf1 = (lv_color_t *)malloc(buffer_size);
   }
 
-  // Allocate second buffer for double buffering to reduce flickering
-  disp_draw_buf2 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!disp_draw_buf2)
-  {
-    Serial.println("Failed to allocate display buffer 2 from SPIRAM, trying internal RAM...");
-    disp_draw_buf2 = (lv_color_t *)malloc(buffer_size);
-  }
+  // Disable second buffer to conserve internal RAM
+  disp_draw_buf2 = nullptr;
 
   if (!disp_draw_buf1)
   {
-    Serial.println("CRITICAL: Failed to allocate LVGL display buffer 1!");
+    Serial.println("CRITICAL: Failed to allocate LVGL display buffer from internal RAM!");
     while (1)
       ;
   }
-  Serial.printf("LVGL buffer 1 allocated: %d bytes\n", buffer_size);
-  if (disp_draw_buf2)
-  {
-    Serial.printf("LVGL buffer 2 allocated: %d bytes (double buffering enabled)\n", buffer_size);
-  }
-  else
-  {
-    Serial.println("LVGL buffer 2 allocation failed - using single buffer");
-  }
+  Serial.printf("LVGL buffer allocated from internal RAM: %d bytes (single buffer mode)\n", buffer_size);
+  Serial.printf("Using internal RAM eliminates SPI bus conflicts completely\n");
   Serial.printf("LVGL_BUFFER_SIZE: %d pixels\n", LVGL_BUFFER_SIZE);
   Serial.printf("LVGL_BUFFER_LINES: %d lines\n", LVGL_BUFFER_LINES);
   Serial.printf("Color depth: %d bytes per pixel\n", sizeof(lv_color_t));
@@ -221,9 +179,11 @@ void setup()
 
 void loop()
 {
-  // Handle LVGL tasks - reduced delay for smoother updates
+  // Handle LVGL tasks with precise timing to prevent display tearing
   lv_timer_handler();
-  delay(200); // Reduced from 5ms to 200ms for smoother timer updates
+
+  // Minimal delay optimized for 60Hz refresh rate synchronization
+  delay(1); // Very short delay to maintain display synchronization
 }
 
 void createUI()
@@ -241,7 +201,7 @@ void createUI()
   lv_label_set_text(label, "Hello LVGL v9!\nESP32-S3 PowerBoard\nRGB Parallel Display");
   lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-  lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN); // Use larger font
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_24, LV_PART_MAIN); // Restored larger font - 24px
   lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 30);
 
   // Create timer label with larger font
@@ -249,15 +209,15 @@ void createUI()
   lv_label_set_text(timer_label, "Timer: 00:00:00");
   lv_obj_set_style_text_color(timer_label, lv_color_hex(0xFF0000), LV_PART_MAIN); // Red color
   lv_obj_set_style_text_align(timer_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-  lv_obj_set_style_text_font(timer_label, &lv_font_montserrat_20, LV_PART_MAIN); // Use larger font for timer
+  lv_obj_set_style_text_font(timer_label, &lv_font_montserrat_28, LV_PART_MAIN); // Restored larger font - 28px
   lv_obj_align(timer_label, LV_ALIGN_CENTER, 0, -50);
 
   // Create LVGL timer that calls timer_callback every 1000ms (1 second)
   lv_timer_t *timer = lv_timer_create(timer_callback, 1000, NULL);
 
-  // Add a simple colored rectangle to test colors
+  // Add a simple colored rectangle to test colors - increased size for larger font
   lv_obj_t *rect = lv_obj_create(scr);
-  lv_obj_set_size(rect, 200, 60);
+  lv_obj_set_size(rect, 250, 70);
   lv_obj_align(rect, LV_ALIGN_CENTER, 0, 100);
   lv_obj_set_style_bg_color(rect, lv_color_hex(0x0000FF), LV_PART_MAIN); // Blue
   lv_obj_set_style_border_width(rect, 0, LV_PART_MAIN);
@@ -266,7 +226,7 @@ void createUI()
   lv_obj_t *rect_label = lv_label_create(rect);
   lv_label_set_text(rect_label, "Blue Rectangle");
   lv_obj_set_style_text_color(rect_label, lv_color_white(), LV_PART_MAIN);
-  lv_obj_set_style_text_font(rect_label, &lv_font_montserrat_16, LV_PART_MAIN); // Use larger font
+  lv_obj_set_style_text_font(rect_label, &lv_font_montserrat_22, LV_PART_MAIN); // Restored larger font - 22px
   lv_obj_center(rect_label);
 
   Serial.println("Simple UI created successfully with timer and improved fonts!");
