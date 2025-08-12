@@ -103,8 +103,29 @@ PowerBoard/
 ```
 
 ## Hardware Configuration
-- **Board**: ESP32-S3 DevKit
-- **PSRAM**: Enabled (8MB)
+
+### ESP32-8048S050 Development Board
+This project uses the ESP32-8048S050 5.0" development board with integrated display and touch capabilities.
+
+#### Key Features
+- **MCU**: ESP32-S3 with dual-core processor
+- **Display**: 5.0" TFT LCD with 800x480 resolution
+- **Touch**: Capacitive touch screen (GT911)
+- **PSRAM**: 8MB external PSRAM
+- **Flash**: 16MB external flash memory
+- **Audio**: Built-in audio amplifier (AX98357A)
+- **Connectivity**: WiFi, Bluetooth
+- **Power**: USB-C power input
+
+#### Current Configuration
+- **Board**: ESP32-S3 DevKit (esp32-s3-devkitc-1)
+- **PSRAM**: Enabled and functional
 - **USB**: CDC on boot enabled
 - **Serial**: Dual output (USB + UART)
 - **Port**: COM3 @ 115200 baud
+- **Status**: Serial communication working, PSRAM detected
+
+#### Development Resources
+- Complete documentation available in `5.0inch_ESP32-8048S050/` folder
+- Specifications, schematics, user manual, and example code included
+- Flash download tools and development utilities provided
