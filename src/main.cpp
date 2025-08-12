@@ -1,346 +1,257 @@
-/*******************************************************************************
- * LVGL Hello World Demo
- * Based on the LvglWidgets example but simplified to show "Hello World"
- * 
- * This demo uses LVGL - Light and Versatile Graphics Library
- * without touch features for the ESP32-S3 PowerBoard
- * 
- * Uses the exact Arduino GFX setup from the working main.cpp
- ******************************************************************************/
 #include <Arduino.h>
 #include <lvgl.h>
 #include <Arduino_GFX_Library.h>
-#include "wifi/wifi_manager.h"
+#include <esp_heap_caps.h>
+#include "display_config.h"
 
-// Backlight pin for ESP32-S3 5-inch display (maps to LCD Pin 2 - LEDA)
-#define TFT_BL 2
-// Note: LCD Pin 1 (LEDK - LED Backlight Cathode) is connected to GND
-// Note: LCD Pin 31 (DISP - Display On/Off) may be hardwired or not connected on this board
+// Function declarations
+void createUI();
+void timer_callback(lv_timer_t * timer);
 
-// Screen dimensions
-#define SCREEN_WIDTH 800
-#define SCREEN_HEIGHT 480
+// Global variables for timer
+static lv_obj_t *timer_label = nullptr;
+static int timer_seconds = 0;
 
-/*******************************************************************************
- * Arduino_GFX Display Configuration (optimized with pin assignments from datasheet)
- ******************************************************************************/
-// ESP32-S3 PowerBoard RGB configuration optimized based on LCD pin assignments
-// Control signals mapping:
-// ESP32 Pin 40 → LCD Pin 34 (DEN - Data Enable)
-// ESP32 Pin 41 → LCD Pin 33 (VSYNC - Vertical Sync) 
-// ESP32 Pin 39 → LCD Pin 32 (HSYNC - Horizontal Sync)
-// ESP32 Pin 42 → LCD Pin 30 (CLK - Clock Signal)
-// ESP32 Pin 2  → LCD Pin 2  (LEDA - LED Backlight Anode via TFT_BL)
-Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
-    40 /* DE */, 41 /* VSYNC */, 39 /* HSYNC */, 42 /* PCLK */,
-    45 /* R0 */, 48 /* R1 */, 47 /* R2 */, 21 /* R3 */, 14 /* R4 */,
-    5 /* G0 */, 6 /* G1 */, 7 /* G2 */, 15 /* G3 */, 16 /* G4 */, 4 /* G5 */,
-    8 /* B0 */, 3 /* B1 */, 46 /* B2 */, 9 /* B3 */, 1 /* B4 */,
-    0 /* hsync_polarity */, 8 /* hsync_front_porch */, 4 /* hsync_pulse_width */, 8 /* hsync_back_porch */,
-    0 /* vsync_polarity */, 8 /* vsync_front_porch */, 4 /* vsync_pulse_width */, 8 /* vsync_back_porch */,
-    1 /* pclk_active_neg */, 16000000 /* prefer_speed - minimum frequency from datasheet for stability */);
+// Create RGB Panel databus and display using the configuration
+Arduino_ESP32RGBPanel *rgbBus = new Arduino_ESP32RGBPanel(
+        TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK,
+        TFT_R0, TFT_R1, TFT_R2, TFT_R3, TFT_R4,
+        TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5,
+        TFT_B0, TFT_B1, TFT_B2, TFT_B3, TFT_B4,
+        HSYNC_POLARITY, HSYNC_FRONT_PORCH, HSYNC_PULSE_WIDTH, HSYNC_BACK_PORCH,
+        VSYNC_POLARITY, VSYNC_FRONT_PORCH, VSYNC_PULSE_WIDTH, VSYNC_BACK_PORCH,
+        PCLK_ACTIVE_NEG, PREFER_SPEED, true /* auto_flush */
+    );
+Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
+        PANEL_WIDTH, PANEL_HEIGHT, rgbBus, 0 /* rotation */, true /* auto_flush */
+    );;
 
-// Create the display object with official pin mapping and minimum frequency
-Arduino_RGB_Display *gfx = new Arduino_RGB_Display(SCREEN_WIDTH, SCREEN_HEIGHT, rgbpanel, 0 /* rotation */, true /* auto_flush */);
 
-/*******************************************************************************
- * LVGL Configuration Variables - LVGL v9 API
- ******************************************************************************/
-static uint32_t screenWidth;
-static uint32_t screenHeight;
-static lv_display_t *disp;
-static lv_color_t *disp_draw_buf;
+// LVGL display buffer - allocated dynamically from SPIRAM
+static lv_color_t *disp_draw_buf1 = nullptr; // Primary buffer
+static lv_color_t *disp_draw_buf2 = nullptr; // Secondary buffer (optional)
 
-// UI elements that need to be updated
-static lv_obj_t *wifi_status_label;
-static lv_obj_t *wifi_ip_label;
-static lv_obj_t *tick_count_label;
+lv_display_t *lvgl_display;
 
-// Tick counter for display
-static uint32_t lvgl_tick_count = 0;
-static unsigned long last_tick_display_update = 0;
-
-/*******************************************************************************
- * LVGL Tick Function - Required for LVGL v9
- ******************************************************************************/
-uint32_t my_get_millis(void)
+// LVGL tick function - essential for LVGL timing
+uint32_t my_tick_function(void)
 {
     return millis();
 }
 
-/*******************************************************************************
- * LVGL Display Flush Function - LVGL v9 API
- ******************************************************************************/
-void my_disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
+// LVGL display flush callback for RGB parallel
+void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p)
 {
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
-    // Boundary checks
-    if (area->x2 >= SCREEN_WIDTH || area->y2 >= SCREEN_HEIGHT) {
-        lv_display_flush_ready(disp_drv);
+    // Reduce debug output frequency to minimize performance impact with larger buffers
+    static int flush_count = 0;
+    if (flush_count++ % 500 == 0) {
+        Serial.printf("Flush #%d: x1=%d, y1=%d, x2=%d, y2=%d, w=%d, h=%d\n", 
+                     flush_count, area->x1, area->y1, area->x2, area->y2, w, h);
+    }
+
+    // LVGL v9+ with LV_COLOR_DEPTH 24 uses RGB888 format (3 bytes per pixel)
+    // Convert RGB888 to RGB565 for the RGB parallel interface
+    uint32_t pixel_count = w * h;
+    
+    // Use MALLOC_CAP_DMA for better performance with larger buffers
+    uint16_t *rgb565_buffer = (uint16_t*)heap_caps_malloc(pixel_count * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    
+    if (!rgb565_buffer) {
+        // Fallback to regular malloc if DMA allocation fails
+        rgb565_buffer = (uint16_t*)malloc(pixel_count * sizeof(uint16_t));
+    }
+    
+    if (!rgb565_buffer) {
+        Serial.printf("ERROR: Failed to allocate RGB565 buffer for %d pixels!\n", pixel_count);
+        lv_display_flush_ready(disp);
         return;
     }
 
-    // Direct pixel transfer using LVGL v9 API
-#if (LV_COLOR_16_SWAP != 0)
-    gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
-#else
-    gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
-#endif
+    uint8_t *rgb888 = color_p;
+    // Optimized conversion loop for better performance with larger buffers
+    for (uint32_t i = 0; i < pixel_count; i++) {
+        // Convert RGB888 to RGB565 with high precision for font rendering
+        // Use standard RGB order for correct color representation
+        uint8_t r = rgb888[i * 3 + 0];     // Red
+        uint8_t g = rgb888[i * 3 + 1];     // Green  
+        uint8_t b = rgb888[i * 3 + 2];     // Blue
+        
+        // High-precision conversion for maximum clarity
+        // Use rounding for best color accuracy with larger display areas
+        uint16_t r5 = (r * 31 + 127) / 255;  // Precise 5-bit conversion
+        uint16_t g6 = (g * 63 + 127) / 255;  // Precise 6-bit conversion
+        uint16_t b5 = (b * 31 + 127) / 255;  // Precise 5-bit conversion
+        
+        rgb565_buffer[i] = (r5 << 11) | (g6 << 5) | b5;
+    }
+    
+    // Send to display with larger buffer chunks
+    gfx->draw16bitRGBBitmap(area->x1, area->y1, rgb565_buffer, w, h);
+    
+    // Free the temporary buffer efficiently
+    if (heap_caps_get_allocated_size(rgb565_buffer) > 0) {
+        heap_caps_free(rgb565_buffer);
+    } else {
+        free(rgb565_buffer);
+    }
 
-    lv_display_flush_ready(disp_drv);
+    // Tell LVGL that flushing is done
+    lv_display_flush_ready(disp);
 }
 
-/*******************************************************************************
- * Create Hello World UI
- ******************************************************************************/
-void create_hello_world_ui()
+// Timer callback function - called every second
+void timer_callback(lv_timer_t * timer)
 {
-    // Create a screen
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x003a57), LV_PART_MAIN);
+    timer_seconds++;
     
-    // Create main title label
-    lv_obj_t *title_label = lv_label_create(scr);
-    lv_label_set_text(title_label, "Hello World!");
-    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(title_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(title_label, LV_ALIGN_CENTER, 0, -100);
-    
-    // Create subtitle label
-    lv_obj_t *subtitle_label = lv_label_create(scr);
-    lv_label_set_text(subtitle_label, "ESP32-S3 PowerBoard with LVGL");
-    lv_obj_set_style_text_font(subtitle_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(subtitle_label, lv_color_hex(0x00ff88), LV_PART_MAIN);
-    lv_obj_align(subtitle_label, LV_ALIGN_CENTER, 0, -70);
-    
-    // Create WiFi status label
-    wifi_status_label = lv_label_create(scr);
-    lv_label_set_text(wifi_status_label, "WiFi: Disconnected");
-    lv_obj_set_style_text_font(wifi_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(0xffaa00), LV_PART_MAIN);
-    lv_obj_align(wifi_status_label, LV_ALIGN_CENTER, 0, -30);
-    
-    // Create WiFi IP label
-    wifi_ip_label = lv_label_create(scr);
-    lv_label_set_text(wifi_ip_label, "IP: Not Connected");
-    lv_obj_set_style_text_font(wifi_ip_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(wifi_ip_label, lv_color_hex(0xcccccc), LV_PART_MAIN);
-    lv_obj_align(wifi_ip_label, LV_ALIGN_CENTER, 0, 0);
-    
-    // Create tick count label
-    tick_count_label = lv_label_create(scr);
-    lv_label_set_text(tick_count_label, "Ticks: 0");
-    lv_obj_set_style_text_font(tick_count_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(tick_count_label, lv_color_hex(0x88ddff), LV_PART_MAIN);
-    lv_obj_align(tick_count_label, LV_ALIGN_CENTER, 0, 30);
-    
-    // Create info label
-    lv_obj_t *info_label = lv_label_create(scr);
-    lv_label_set_text(info_label, "800x480 RGB Display\nRunning LVGL Graphics Library");
-    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(info_label, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_obj_set_style_text_align(info_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_align(info_label, LV_ALIGN_CENTER, 0, 70);
-    
-    // Create a simple static arc (no animation to prevent flickering)
-    lv_obj_t *arc = lv_arc_create(scr);
-    lv_obj_set_size(arc, 80, 80);
-    lv_arc_set_rotation(arc, 0);
-    lv_arc_set_bg_angles(arc, 0, 360);
-    lv_arc_set_angles(arc, 0, 270); // Static 3/4 circle
-    lv_obj_set_style_arc_color(arc, lv_color_hex(0x00ff88), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(arc, 6, LV_PART_INDICATOR);
-    lv_obj_remove_style(arc, NULL, LV_PART_KNOB);   // Remove the knob
-    lv_obj_align(arc, LV_ALIGN_CENTER, 0, 140);
-    
-    // Force a screen refresh
-    lv_obj_invalidate(scr);
-}
-
-/*******************************************************************************
- * Update Tick Count Display
- ******************************************************************************/
-void update_tick_count_display()
-{
-    if (tick_count_label) {
-        char tick_text[32];
-        snprintf(tick_text, sizeof(tick_text), "Seconds: %lu", lvgl_tick_count);
-        lv_label_set_text(tick_count_label, tick_text);
-        lv_obj_invalidate(tick_count_label);
+    // Update the timer label text
+    if (timer_label) {
+        char time_str[32];
+        int hours = timer_seconds / 3600;
+        int minutes = (timer_seconds % 3600) / 60;
+        int seconds = timer_seconds % 60;
+        
+        sprintf(time_str, "Timer: %02d:%02d:%02d", hours, minutes, seconds);
+        
+        // Use LVGL's efficient text update - only invalidates the label area
+        lv_label_set_text(timer_label, time_str);
+        
+        // Optional: Force only the label area to be redrawn to minimize flickering
+        lv_obj_invalidate(timer_label);
     }
 }
 
-/*******************************************************************************
- * Update WiFi Status Display
- ******************************************************************************/
-void update_wifi_status_display()
-{
-    if (wifi_status_label && wifi_ip_label) {
-        // Get current status
-        WiFiStatus current_status = wifiManager.getStatus();
-        
-        // Update status label with simple text based on status
-        const char* status_text;
-        uint32_t status_color;
-        uint32_t ip_color;
-        
-        switch (current_status) {
-            case WIFI_CONNECTED:
-                status_text = "WiFi: Connected";
-                status_color = 0x00ff88;
-                ip_color = 0x00ff88;
-                break;
-            case WIFI_CONNECTING:
-                status_text = "WiFi: Connecting...";
-                status_color = 0xffaa00;
-                ip_color = 0xcccccc;
-                break;
-            case WIFI_DISCONNECTED:
-                status_text = "WiFi: Disconnected";
-                status_color = 0xff4444;
-                ip_color = 0xcccccc;
-                break;
-            case WIFI_CONNECTION_FAILED:
-                status_text = "WiFi: Failed";
-                status_color = 0xff4444;
-                ip_color = 0xcccccc;
-                break;
-            default:
-                status_text = "WiFi: Unknown";
-                status_color = 0xcccccc;
-                ip_color = 0xcccccc;
-                break;
-        }
-        
-        lv_label_set_text(wifi_status_label, status_text);
-        lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(status_color), LV_PART_MAIN);
-        
-        // Update IP label
-        if (current_status == WIFI_CONNECTED) {
-            // Only get IP string when connected to avoid unnecessary WiFi calls
-            String ip_text = "IP: " + wifiManager.getLocalIP();
-            lv_label_set_text(wifi_ip_label, ip_text.c_str());
-        } else {
-            lv_label_set_text(wifi_ip_label, "IP: Not Connected");
-        }
-        lv_obj_set_style_text_color(wifi_ip_label, lv_color_hex(ip_color), LV_PART_MAIN);
-    }
-}
-
-/*******************************************************************************
- * Setup Function - Using exact Arduino GFX setup from working main.cpp
- ******************************************************************************/
 void setup()
 {
     Serial.begin(115200);
-    delay(1000);
-    
-    Serial.println("=== ESP32-S3 PowerBoard LVGL Hello World Demo ===");
+    Serial.println("Starting ESP32-S3 PowerBoard with RGB Parallel Display...");
 
-    // Initialize display backlight
+    // Initialize backlight
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+    digitalWrite(TFT_BL, HIGH); // Turn on backlight
 
-    // Initialize display
-    gfx->begin();
+    // Initialize RGB parallel display
+    if (!gfx->begin()) {
+        Serial.println("Failed to initialize RGB parallel display!");
+        return;
+    }
+
+    Serial.println("RGB parallel display initialized successfully!");
+    Serial.printf("Display: %dx%d RGB parallel @ %d MHz\n", PANEL_WIDTH, PANEL_HEIGHT, PREFER_SPEED/1000000);
+
+    // Test display with a simple fill
     gfx->fillScreen(BLACK);
+    delay(500);
+    gfx->fillScreen(RED);
+    delay(500);
+    gfx->fillScreen(GREEN);
+    delay(500);  
+    gfx->fillScreen(BLUE);
+    delay(500);
+    gfx->fillScreen(BLACK);
+
+    Serial.println("Display test complete!");
+
+    // Allocate LVGL buffers from SPIRAM - with double buffering for smooth updates
+    size_t buffer_size = LVGL_BUFFER_SIZE * sizeof(lv_color_t);
+    disp_draw_buf1 = (lv_color_t*)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!disp_draw_buf1) {
+        Serial.println("Failed to allocate display buffer 1 from SPIRAM, trying internal RAM...");
+        disp_draw_buf1 = (lv_color_t*)malloc(buffer_size);
+    }
+    
+    // Allocate second buffer for double buffering to reduce flickering
+    disp_draw_buf2 = (lv_color_t*)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!disp_draw_buf2) {
+        Serial.println("Failed to allocate display buffer 2 from SPIRAM, trying internal RAM...");
+        disp_draw_buf2 = (lv_color_t*)malloc(buffer_size);
+    }
+    
+    if (!disp_draw_buf1) {
+        Serial.println("CRITICAL: Failed to allocate LVGL display buffer 1!");
+        while(1);
+    }
+    Serial.printf("LVGL buffer 1 allocated: %d bytes\n", buffer_size);
+    if (disp_draw_buf2) {
+        Serial.printf("LVGL buffer 2 allocated: %d bytes (double buffering enabled)\n", buffer_size);
+    } else {
+        Serial.println("LVGL buffer 2 allocation failed - using single buffer");
+    }
+    Serial.printf("LVGL_BUFFER_SIZE: %d pixels\n", LVGL_BUFFER_SIZE);
+    Serial.printf("LVGL_BUFFER_LINES: %d lines\n", LVGL_BUFFER_LINES);
+    Serial.printf("Color depth: %d bytes per pixel\n", sizeof(lv_color_t));
 
     // Initialize LVGL
     lv_init();
-    delay(10);
-    
-    // Set tick callback - CRITICAL for LVGL v9
-    lv_tick_set_cb(my_get_millis);
 
-    // Get screen dimensions
-    screenWidth = gfx->width();
-    screenHeight = gfx->height();
+    // Set up LVGL tick function - CRITICAL for LVGL timing!
+    lv_tick_set_cb(my_tick_function);
 
-    // Allocate LVGL draw buffer
-    uint32_t buf_size = screenWidth * screenHeight / 50;
-    
-    disp_draw_buf = (lv_color_t *)malloc(sizeof(lv_color_t) * buf_size);
+    // Create LVGL display
+    lvgl_display = lv_display_create(PANEL_WIDTH, PANEL_HEIGHT);
+    lv_display_set_flush_cb(lvgl_display, my_disp_flush);
+    lv_display_set_buffers(lvgl_display, disp_draw_buf1, disp_draw_buf2, LVGL_BUFFER_SIZE, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-    if (!disp_draw_buf)
-    {
-        // Try even smaller buffer
-        buf_size = screenWidth * screenHeight / 60;
-        disp_draw_buf = (lv_color_t *)malloc(sizeof(lv_color_t) * buf_size);
-    }
-    
-    if (!disp_draw_buf)
-    {
-        Serial.println("LVGL buffer allocation failed!");
-        return;
-    }
-    else
-    {
-        // Initialize LVGL display using v9 API
-        disp = lv_display_create(screenWidth, screenHeight);
-        lv_display_set_flush_cb(disp, my_disp_flush);
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
-        
-        // Create Hello World UI
-        create_hello_world_ui();
+    Serial.println("LVGL initialized with RGB parallel display driver!");
 
-        // Initialize WiFi
-        wifiManager.begin();
+    // Create UI
+    createUI();
 
-        // Initialize tick counter display
-        update_tick_count_display();
-
-        Serial.println("Setup complete!");
-    }
+    Serial.println("Setup complete! Enjoying 40MHz RGB parallel performance!");
 }
 
-/*******************************************************************************
- * Loop Function
- ******************************************************************************/
 void loop()
 {
-    // Simple tick counter that updates every second
-    if (millis() - last_tick_display_update > 1000) {
-        lvgl_tick_count++;
-        update_tick_count_display();
-        last_tick_display_update = millis();
-    }
+    // Handle LVGL tasks - reduced delay for smoother updates
+    lv_timer_handler();
+    delay(200);  // Reduced from 5ms to 200ms for smoother timer updates
+}
+
+void createUI()
+{
+    Serial.println("Creating simple UI...");
     
-    // Call LVGL timer at 5 FPS (200ms intervals)
-    static unsigned long last_lvgl_update = 0;
-    if (millis() - last_lvgl_update > 200) {
-        lv_timer_handler();
-        last_lvgl_update = millis();
-    }
+    // Get the active screen
+    lv_obj_t *scr = lv_screen_active();
     
-    // Update WiFi manager every second
-    static unsigned long last_wifi_update = 0;
-    if (millis() - last_wifi_update > 1000) {
-        wifiManager.update();
-        last_wifi_update = millis();
-    }
+    // Set background to white
+    lv_obj_set_style_bg_color(scr, lv_color_white(), LV_PART_MAIN);
     
-    // Update WiFi status display every 5 seconds
-    static unsigned long last_display_check = 0;
-    static WiFiStatus last_wifi_status = WIFI_DISCONNECTED;
-    static String last_ip = "0.0.0.0";
+    // Create a simple label with larger font for better clarity
+    lv_obj_t *label = lv_label_create(scr);
+    lv_label_set_text(label, "Hello LVGL v9!\nESP32-S3 PowerBoard\nRGB Parallel Display");
+    lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN); // Use larger font
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 30);
     
-    if (millis() - last_display_check > 5000) {
-        WiFiStatus current_status = wifiManager.getStatus();
-        String current_ip = wifiManager.getLocalIP();
-        
-        // Update display when status/IP changes OR on periodic check
-        bool status_changed = (current_status != last_wifi_status || current_ip != last_ip);
-        
-        if (status_changed) {
-            update_wifi_status_display();
-            last_wifi_status = current_status;
-            last_ip = current_ip;
-        }
-        
-        last_display_check = millis();
-    }
+    // Create timer label with larger font
+    timer_label = lv_label_create(scr);
+    lv_label_set_text(timer_label, "Timer: 00:00:00");
+    lv_obj_set_style_text_color(timer_label, lv_color_hex(0xFF0000), LV_PART_MAIN); // Red color
+    lv_obj_set_style_text_align(timer_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(timer_label, &lv_font_montserrat_20, LV_PART_MAIN); // Use larger font for timer
+    lv_obj_align(timer_label, LV_ALIGN_CENTER, 0, -50);
     
-    delay(100);
+    // Create LVGL timer that calls timer_callback every 1000ms (1 second)
+    lv_timer_t *timer = lv_timer_create(timer_callback, 1000, NULL);
+    
+    // Add a simple colored rectangle to test colors
+    lv_obj_t *rect = lv_obj_create(scr);
+    lv_obj_set_size(rect, 200, 60);
+    lv_obj_align(rect, LV_ALIGN_CENTER, 0, 100);
+    lv_obj_set_style_bg_color(rect, lv_color_hex(0x0000FF), LV_PART_MAIN); // Blue
+    lv_obj_set_style_border_width(rect, 0, LV_PART_MAIN);
+    
+    // Add text to the rectangle with larger font
+    lv_obj_t *rect_label = lv_label_create(rect);
+    lv_label_set_text(rect_label, "Blue Rectangle");
+    lv_obj_set_style_text_color(rect_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(rect_label, &lv_font_montserrat_16, LV_PART_MAIN); // Use larger font
+    lv_obj_center(rect_label);
+    
+    Serial.println("Simple UI created successfully with timer and improved fonts!");
 }

@@ -17,6 +17,11 @@
 #ifndef LV_CONF_H
 #define LV_CONF_H
 
+// Optimized for ESP32-S3 RGB Parallel Display - Native performance
+#ifndef LV_LVGL_H_INCLUDE_SIMPLE
+#define LV_LVGL_H_INCLUDE_SIMPLE
+#endif
+
 /* If you need to include anything here, do it inside the `__ASSEMBLY__` guard */
 #if  0 && defined(__ASSEMBLY__)
 #include "my_include.h"
@@ -27,7 +32,7 @@
  *====================*/
 
 /** Color depth: 1 (I1), 8 (L8), 16 (RGB565), 24 (RGB888), 32 (XRGB8888) */
-#define LV_COLOR_DEPTH 16
+#define LV_COLOR_DEPTH 24
 
 /*=========================
    STDLIB WRAPPER SETTINGS
@@ -69,7 +74,9 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (48 * 1024U)          /**< [bytes] Reduced for ESP32-S3 */
+    #ifndef LV_MEM_SIZE
+        #define LV_MEM_SIZE (128 * 1024U)          /**< [bytes] 128KB for ESP32-S3 with SPIRAM */
+    #endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE 0
@@ -587,9 +594,9 @@
 #define LV_FONT_MONTSERRAT_10 0
 #define LV_FONT_MONTSERRAT_12 0
 #define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_16 0
-#define LV_FONT_MONTSERRAT_18 0
-#define LV_FONT_MONTSERRAT_20 0
+#define LV_FONT_MONTSERRAT_16 1  /* Enable 16px font for better readability */
+#define LV_FONT_MONTSERRAT_18 1  /* Enable 18px font for better readability */
+#define LV_FONT_MONTSERRAT_20 1  /* Enable 20px font for better readability */
 #define LV_FONT_MONTSERRAT_22 0
 #define LV_FONT_MONTSERRAT_24 0
 #define LV_FONT_MONTSERRAT_26 0
