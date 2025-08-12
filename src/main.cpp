@@ -12,17 +12,25 @@
 #include <Arduino_GFX_Library.h>
 #include "wifi/wifi_manager.h"
 
-// Backlight pin for ESP32-S3 5-inch display
+// Backlight pin for ESP32-S3 5-inch display (maps to LCD Pin 2 - LEDA)
 #define TFT_BL 2
+// Note: LCD Pin 1 (LEDK - LED Backlight Cathode) is connected to GND
+// Note: LCD Pin 31 (DISP - Display On/Off) may be hardwired or not connected on this board
 
 // Screen dimensions
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 480
 
 /*******************************************************************************
- * Arduino_GFX Display Configuration (from working main.cpp)
+ * Arduino_GFX Display Configuration (optimized with pin assignments from datasheet)
  ******************************************************************************/
-// Manual RGB panel configuration for ESP32-S3 5-inch display
+// ESP32-S3 PowerBoard RGB configuration optimized based on LCD pin assignments
+// Control signals mapping:
+// ESP32 Pin 40 → LCD Pin 34 (DEN - Data Enable)
+// ESP32 Pin 41 → LCD Pin 33 (VSYNC - Vertical Sync) 
+// ESP32 Pin 39 → LCD Pin 32 (HSYNC - Horizontal Sync)
+// ESP32 Pin 42 → LCD Pin 30 (CLK - Clock Signal)
+// ESP32 Pin 2  → LCD Pin 2  (LEDA - LED Backlight Anode via TFT_BL)
 Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     40 /* DE */, 41 /* VSYNC */, 39 /* HSYNC */, 42 /* PCLK */,
     45 /* R0 */, 48 /* R1 */, 47 /* R2 */, 21 /* R3 */, 14 /* R4 */,
@@ -30,13 +38,13 @@ Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     8 /* B0 */, 3 /* B1 */, 46 /* B2 */, 9 /* B3 */, 1 /* B4 */,
     0 /* hsync_polarity */, 8 /* hsync_front_porch */, 4 /* hsync_pulse_width */, 8 /* hsync_back_porch */,
     0 /* vsync_polarity */, 8 /* vsync_front_porch */, 4 /* vsync_pulse_width */, 8 /* vsync_back_porch */,
-    1 /* pclk_active_neg */, 16000000 /* prefer_speed */);
+    1 /* pclk_active_neg */, 16000000 /* prefer_speed - minimum frequency from datasheet for stability */);
 
-// Create the display object
-Arduino_RGB_Display *gfx = new Arduino_RGB_Display(SCREEN_WIDTH, SCREEN_HEIGHT, rgbpanel);
+// Create the display object with official pin mapping and minimum frequency
+Arduino_RGB_Display *gfx = new Arduino_RGB_Display(SCREEN_WIDTH, SCREEN_HEIGHT, rgbpanel, 0 /* rotation */, true /* auto_flush */);
 
 /*******************************************************************************
- * LVGL Configuration Variables
+ * LVGL Configuration Variables - LVGL v9 API
  ******************************************************************************/
 static uint32_t screenWidth;
 static uint32_t screenHeight;
@@ -46,41 +54,42 @@ static lv_color_t *disp_draw_buf;
 // UI elements that need to be updated
 static lv_obj_t *wifi_status_label;
 static lv_obj_t *wifi_ip_label;
+static lv_obj_t *tick_count_label;
+
+// Tick counter for display
+static uint32_t lvgl_tick_count = 0;
+static unsigned long last_tick_display_update = 0;
 
 /*******************************************************************************
- * LVGL Display Flush Function - Updated for LVGL v9
+ * LVGL Tick Function - Required for LVGL v9
+ ******************************************************************************/
+uint32_t my_get_millis(void)
+{
+    return millis();
+}
+
+/*******************************************************************************
+ * LVGL Display Flush Function - LVGL v9 API
  ******************************************************************************/
 void my_disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
 {
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
-    // Debug output every few flushes to track activity
-    static int flush_count = 0;
-    flush_count++;
-    if (flush_count % 100 == 0) {  // Every 100 flushes
-        Serial.print("LVGL Flush #");
-        Serial.print(flush_count);
-        Serial.print(": ");
-        Serial.print(w);
-        Serial.print("x");
-        Serial.println(h);
-    }
-
     // Boundary checks
     if (area->x2 >= SCREEN_WIDTH || area->y2 >= SCREEN_HEIGHT) {
-        lv_disp_flush_ready(disp_drv);
+        lv_display_flush_ready(disp_drv);
         return;
     }
 
-    // Direct pixel transfer without additional processing
+    // Direct pixel transfer using LVGL v9 API
 #if (LV_COLOR_16_SWAP != 0)
     gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
 #else
     gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
 #endif
 
-    lv_disp_flush_ready(disp_drv);
+    lv_display_flush_ready(disp_drv);
 }
 
 /*******************************************************************************
@@ -88,12 +97,9 @@ void my_disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px
  ******************************************************************************/
 void create_hello_world_ui()
 {
-    Serial.println("Creating Hello World UI...");
-    
     // Create a screen
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x003a57), LV_PART_MAIN);
-    Serial.println("Screen background set");
     
     // Create main title label
     lv_obj_t *title_label = lv_label_create(scr);
@@ -101,7 +107,6 @@ void create_hello_world_ui()
     lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(title_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_align(title_label, LV_ALIGN_CENTER, 0, -100);
-    Serial.println("Title label created");
     
     // Create subtitle label
     lv_obj_t *subtitle_label = lv_label_create(scr);
@@ -109,7 +114,6 @@ void create_hello_world_ui()
     lv_obj_set_style_text_font(subtitle_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(subtitle_label, lv_color_hex(0x00ff88), LV_PART_MAIN);
     lv_obj_align(subtitle_label, LV_ALIGN_CENTER, 0, -70);
-    Serial.println("Subtitle label created");
     
     // Create WiFi status label
     wifi_status_label = lv_label_create(scr);
@@ -117,7 +121,6 @@ void create_hello_world_ui()
     lv_obj_set_style_text_font(wifi_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(0xffaa00), LV_PART_MAIN);
     lv_obj_align(wifi_status_label, LV_ALIGN_CENTER, 0, -30);
-    Serial.println("WiFi status label created");
     
     // Create WiFi IP label
     wifi_ip_label = lv_label_create(scr);
@@ -125,7 +128,13 @@ void create_hello_world_ui()
     lv_obj_set_style_text_font(wifi_ip_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(wifi_ip_label, lv_color_hex(0xcccccc), LV_PART_MAIN);
     lv_obj_align(wifi_ip_label, LV_ALIGN_CENTER, 0, 0);
-    Serial.println("WiFi IP label created");
+    
+    // Create tick count label
+    tick_count_label = lv_label_create(scr);
+    lv_label_set_text(tick_count_label, "Ticks: 0");
+    lv_obj_set_style_text_font(tick_count_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(tick_count_label, lv_color_hex(0x88ddff), LV_PART_MAIN);
+    lv_obj_align(tick_count_label, LV_ALIGN_CENTER, 0, 30);
     
     // Create info label
     lv_obj_t *info_label = lv_label_create(scr);
@@ -133,8 +142,7 @@ void create_hello_world_ui()
     lv_obj_set_style_text_font(info_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(info_label, lv_color_hex(0xffffff), LV_PART_MAIN);
     lv_obj_set_style_text_align(info_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_align(info_label, LV_ALIGN_CENTER, 0, 50);
-    Serial.println("Info label created");
+    lv_obj_align(info_label, LV_ALIGN_CENTER, 0, 70);
     
     // Create a simple static arc (no animation to prevent flickering)
     lv_obj_t *arc = lv_arc_create(scr);
@@ -145,17 +153,27 @@ void create_hello_world_ui()
     lv_obj_set_style_arc_color(arc, lv_color_hex(0x00ff88), LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(arc, 6, LV_PART_INDICATOR);
     lv_obj_remove_style(arc, NULL, LV_PART_KNOB);   // Remove the knob
-    lv_obj_align(arc, LV_ALIGN_CENTER, 0, 120);
-    Serial.println("Static arc created");
+    lv_obj_align(arc, LV_ALIGN_CENTER, 0, 140);
     
     // Force a screen refresh
     lv_obj_invalidate(scr);
-    
-    Serial.println("Hello World UI created successfully!");
 }
 
 /*******************************************************************************
- * Update WiFi Status Display - Optimized to reduce string operations
+ * Update Tick Count Display
+ ******************************************************************************/
+void update_tick_count_display()
+{
+    if (tick_count_label) {
+        char tick_text[32];
+        snprintf(tick_text, sizeof(tick_text), "Seconds: %lu", lvgl_tick_count);
+        lv_label_set_text(tick_count_label, tick_text);
+        lv_obj_invalidate(tick_count_label);
+    }
+}
+
+/*******************************************************************************
+ * Update WiFi Status Display
  ******************************************************************************/
 void update_wifi_status_display()
 {
@@ -220,84 +238,60 @@ void setup()
     delay(1000);
     
     Serial.println("=== ESP32-S3 PowerBoard LVGL Hello World Demo ===");
-    Serial.println("Initializing display...");
 
-    // Initialize display backlight (exact same as working main.cpp)
+    // Initialize display backlight
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, HIGH);
 
-    // Initialize display (exact same as working main.cpp)
+    // Initialize display
     gfx->begin();
     gfx->fillScreen(BLACK);
-
-    // Test display with color fills (like in LvglWidgets example)
-    gfx->fillScreen(RED);
-    delay(500);
-    gfx->fillScreen(GREEN);
-    delay(500);
-    gfx->fillScreen(BLUE);
-    delay(500);
-    gfx->fillScreen(BLACK);
-    delay(500);
 
     // Initialize LVGL
     lv_init();
     delay(10);
+    
+    // Set tick callback - CRITICAL for LVGL v9
+    lv_tick_set_cb(my_get_millis);
 
     // Get screen dimensions
     screenWidth = gfx->width();
     screenHeight = gfx->height();
 
-    Serial.print("Screen size: ");
-    Serial.print(screenWidth);
-    Serial.print("x");
-    Serial.println(screenHeight);
-
-    // Allocate LVGL draw buffer - simplified allocation with LV_MEM_CUSTOM 0
-    // Using 1/20th of screen size to minimize memory usage and reduce display updates
-    uint32_t buf_size = screenWidth * screenHeight / 20;
+    // Allocate LVGL draw buffer
+    uint32_t buf_size = screenWidth * screenHeight / 50;
     
     disp_draw_buf = (lv_color_t *)malloc(sizeof(lv_color_t) * buf_size);
 
     if (!disp_draw_buf)
     {
-        Serial.print("LVGL buffer allocation failed! Tried to allocate: ");
-        Serial.print(buf_size * sizeof(lv_color_t));
-        Serial.println(" bytes");
-        
         // Try even smaller buffer
-        buf_size = screenWidth * screenHeight / 30;
-        Serial.print("Trying smaller buffer: ");
-        Serial.print(buf_size * sizeof(lv_color_t));
-        Serial.println(" bytes");
-        
+        buf_size = screenWidth * screenHeight / 60;
         disp_draw_buf = (lv_color_t *)malloc(sizeof(lv_color_t) * buf_size);
     }
     
     if (!disp_draw_buf)
     {
-        Serial.println("LVGL buffer allocation completely failed!");
+        Serial.println("LVGL buffer allocation failed!");
         return;
     }
     else
     {
-        Serial.print("LVGL buffer allocated successfully: ");
-        Serial.print(buf_size * sizeof(lv_color_t));
-        Serial.println(" bytes");
-        
-        // Initialize LVGL display for v9
+        // Initialize LVGL display using v9 API
         disp = lv_display_create(screenWidth, screenHeight);
         lv_display_set_flush_cb(disp, my_disp_flush);
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, buf_size * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
-
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        
         // Create Hello World UI
         create_hello_world_ui();
 
         // Initialize WiFi
-        Serial.println("Initializing WiFi...");
         wifiManager.begin();
 
-        Serial.println("LVGL Hello World Demo Setup Complete!");
+        // Initialize tick counter display
+        update_tick_count_display();
+
+        Serial.println("Setup complete!");
     }
 }
 
@@ -306,40 +300,47 @@ void setup()
  ******************************************************************************/
 void loop()
 {
-    // Always call LVGL timer first for smooth UI updates
-    lv_timer_handler();
+    // Simple tick counter that updates every second
+    if (millis() - last_tick_display_update > 1000) {
+        lvgl_tick_count++;
+        update_tick_count_display();
+        last_tick_display_update = millis();
+    }
     
-    // Update WiFi manager (check every 500ms to reduce overhead)
+    // Call LVGL timer at 5 FPS (200ms intervals)
+    static unsigned long last_lvgl_update = 0;
+    if (millis() - last_lvgl_update > 200) {
+        lv_timer_handler();
+        last_lvgl_update = millis();
+    }
+    
+    // Update WiFi manager every second
     static unsigned long last_wifi_update = 0;
-    if (millis() - last_wifi_update > 500) {
+    if (millis() - last_wifi_update > 1000) {
         wifiManager.update();
         last_wifi_update = millis();
     }
     
-    // Update WiFi status display
-    static unsigned long last_display_update = 0;
+    // Update WiFi status display every 5 seconds
+    static unsigned long last_display_check = 0;
     static WiFiStatus last_wifi_status = WIFI_DISCONNECTED;
     static String last_ip = "0.0.0.0";
     
-    WiFiStatus current_status = wifiManager.getStatus();
-    String current_ip = wifiManager.getLocalIP();
-    
-    // Update display when status/IP changes OR every 2 seconds for periodic refresh
-    bool status_changed = (current_status != last_wifi_status || current_ip != last_ip);
-    bool time_to_refresh = (millis() - last_display_update > 2000);
-    
-    if (status_changed || time_to_refresh) {
-        update_wifi_status_display();
-        last_display_update = millis();
-        last_wifi_status = current_status;
-        last_ip = current_ip;
+    if (millis() - last_display_check > 5000) {
+        WiFiStatus current_status = wifiManager.getStatus();
+        String current_ip = wifiManager.getLocalIP();
         
-        // Debug info
-        Serial.print("Display updated - Status: ");
-        Serial.print(wifiManager.getStatusString());
-        Serial.print(" IP: ");
-        Serial.println(current_ip);
+        // Update display when status/IP changes OR on periodic check
+        bool status_changed = (current_status != last_wifi_status || current_ip != last_ip);
+        
+        if (status_changed) {
+            update_wifi_status_display();
+            last_wifi_status = current_status;
+            last_ip = current_ip;
+        }
+        
+        last_display_check = millis();
     }
     
-    delay(5); // Reduced delay for more responsive UI
+    delay(100);
 }
