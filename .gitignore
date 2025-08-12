@@ -1,6 +1,9 @@
 # PlatformIO files and directories
 .pio/
 
+# Workspace configuration (user-specific)
+*.code-workspace
+
 # Build artifacts
 build/
 .pioenvs/
