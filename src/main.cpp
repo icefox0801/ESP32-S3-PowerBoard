@@ -12,7 +12,7 @@ void timer_callback(lv_timer_t *timer);
 static lv_obj_t *timer_label = nullptr;
 static int timer_seconds = 0;
 
-// Create RGB Panel databus and display optimized for anti-tearing
+// Create RGB Panel databus and display with auto_flush enabled for stable sync
 Arduino_ESP32RGBPanel *rgbBus = new Arduino_ESP32RGBPanel(
     TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK,
     TFT_R0, TFT_R1, TFT_R2, TFT_R3, TFT_R4,
@@ -20,10 +20,10 @@ Arduino_ESP32RGBPanel *rgbBus = new Arduino_ESP32RGBPanel(
     TFT_B0, TFT_B1, TFT_B2, TFT_B3, TFT_B4,
     HSYNC_POLARITY, HSYNC_FRONT_PORCH, HSYNC_PULSE_WIDTH, HSYNC_BACK_PORCH,
     VSYNC_POLARITY, VSYNC_FRONT_PORCH, VSYNC_PULSE_WIDTH, VSYNC_BACK_PORCH,
-    PCLK_ACTIVE_NEG, PREFER_SPEED, false /* auto_flush disabled for precise timing control */
+    PCLK_ACTIVE_NEG, PREFER_SPEED, true /* auto_flush enabled for stable horizontal sync */
 );
 Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
-    PANEL_WIDTH, PANEL_HEIGHT, rgbBus, 0 /* rotation */, false /* auto_flush disabled for manual control */
+    PANEL_WIDTH, PANEL_HEIGHT, rgbBus, 0 /* rotation */, true /* auto_flush enabled */
 );
 
 // LVGL display buffer - allocated dynamically from SPIRAM
@@ -38,44 +38,21 @@ uint32_t my_tick_function(void)
   return millis();
 }
 
-// LVGL display flush callback with RGB conversion
+// LVGL display flush callback - simplified for stable horizontal sync
 void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p)
 {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
-  uint32_t pixel_count = w * h;
 
-  // Allocate RGB565 buffer for conversion
-  uint16_t *rgb565_buffer = (uint16_t *)malloc(pixel_count * sizeof(uint16_t));
-  if (!rgb565_buffer)
-  {
-    lv_display_flush_ready(disp);
-    return;
-  }
+  // With LV_COLOR_DEPTH 16, color_p is already 16-bit RGB565 data
+  uint16_t *rgb565_data = (uint16_t *)color_p;
 
-  // Convert RGB888 to RGB565 - try BGR order since colors are swapped
-  uint8_t *rgb888 = color_p;
-  for (uint32_t i = 0; i < pixel_count; i++)
-  {
-    uint8_t b = rgb888[i * 3];     // Blue channel (swapped from red)
-    uint8_t g = rgb888[i * 3 + 1]; // Green channel
-    uint8_t r = rgb888[i * 3 + 2]; // Red channel (swapped from blue)
+#if (LV_COLOR_16_SWAP != 0)
+  gfx->draw16bitBeRGBBitmap(area->x1, area->y1, rgb565_data, w, h);
+#else
+  gfx->draw16bitRGBBitmap(area->x1, area->y1, rgb565_data, w, h);
+#endif
 
-    // Convert to RGB565 format: RRRRRGGGGGGBBBBB
-    uint16_t r5 = (r >> 3) & 0x1F; // 5-bit red
-    uint16_t g6 = (g >> 2) & 0x3F; // 6-bit green
-    uint16_t b5 = (b >> 3) & 0x1F; // 5-bit blue
-
-    rgb565_buffer[i] = (r5 << 11) | (g6 << 5) | b5;
-  }
-
-  // Send to display using 16-bit bitmap
-  gfx->draw16bitRGBBitmap(area->x1, area->y1, rgb565_buffer, w, h);
-
-  // Free the temporary buffer
-  free(rgb565_buffer);
-
-  // Signal completion to LVGL
   lv_display_flush_ready(disp);
 }
 
@@ -134,26 +111,41 @@ void setup()
 
   Serial.println("Display test complete!");
 
-  // Allocate LVGL buffer from internal RAM - eliminates SPI bus conflicts completely
+  // Allocate LVGL buffers for smooth rendering - use larger buffer for RGB parallel
   size_t buffer_size = LVGL_BUFFER_SIZE * sizeof(lv_color_t);
-  disp_draw_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+  // First buffer - try SPIRAM first, then internal RAM
+  disp_draw_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!disp_draw_buf1)
   {
-    Serial.println("Failed to allocate display buffer from internal RAM, trying regular malloc...");
-    disp_draw_buf1 = (lv_color_t *)malloc(buffer_size);
+    Serial.println("Failed to allocate buffer 1 from SPIRAM, trying internal RAM...");
+    disp_draw_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   }
 
-  // Disable second buffer to conserve internal RAM
-  disp_draw_buf2 = nullptr;
+  // Second buffer for double buffering to reduce flickering
+  disp_draw_buf2 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!disp_draw_buf2)
+  {
+    Serial.println("Failed to allocate buffer 2 from SPIRAM, trying internal RAM...");
+    disp_draw_buf2 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
 
   if (!disp_draw_buf1)
   {
-    Serial.println("CRITICAL: Failed to allocate LVGL display buffer from internal RAM!");
+    Serial.println("CRITICAL: Failed to allocate LVGL display buffer 1!");
     while (1)
       ;
   }
-  Serial.printf("LVGL buffer allocated from internal RAM: %d bytes (single buffer mode)\n", buffer_size);
-  Serial.printf("Using internal RAM eliminates SPI bus conflicts completely\n");
+
+  Serial.printf("LVGL buffer 1 allocated: %d bytes\n", buffer_size);
+  if (disp_draw_buf2)
+  {
+    Serial.printf("LVGL buffer 2 allocated: %d bytes (double buffering enabled)\n", buffer_size);
+  }
+  else
+  {
+    Serial.println("LVGL buffer 2 allocation failed - using single buffer (may cause flickering)");
+  }
   Serial.printf("LVGL_BUFFER_SIZE: %d pixels\n", LVGL_BUFFER_SIZE);
   Serial.printf("LVGL_BUFFER_LINES: %d lines\n", LVGL_BUFFER_LINES);
   Serial.printf("Color depth: %d bytes per pixel\n", sizeof(lv_color_t));
@@ -169,7 +161,7 @@ void setup()
   lv_display_set_flush_cb(lvgl_display, my_disp_flush);
   lv_display_set_buffers(lvgl_display, disp_draw_buf1, disp_draw_buf2, LVGL_BUFFER_SIZE, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-  Serial.println("LVGL initialized with RGB parallel display driver!");
+  Serial.println("LVGL initialized with RGB parallel display driver (double buffering enabled)!");
 
   // Create UI
   createUI();
