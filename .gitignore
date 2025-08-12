@@ -11,6 +11,10 @@ build/
 .clang_complete
 .gcc-flags.json
 
+# WiFi configuration (contains sensitive credentials)
+# Ignore WiFi configuration files with actual credentials
+src/wifi/wifi_config.h
+
 # Temporary files
 *.tmp
 *.bak

@@ -36,14 +36,24 @@ pio run --target upload --upload-port COM3
 pio device monitor --port COM3 --baud 115200
 ```
 
+### WiFi Configuration
+```bash
+# Copy WiFi config template
+cp src/wifi/wifi_config_template.h src/wifi/wifi_config.h
+
+# Edit your WiFi credentials in src/wifi/wifi_config.h
+```
+See [src/wifi/README.md](src/wifi/README.md) for detailed WiFi setup instructions.
+
 ## Features
 
 ### Current Implementation
-- ✅ **Display Integration**: Full RGB parallel display support
+- ✅ **Display Integration**: Full RGB parallel display support with LVGL
+- ✅ **WiFi Connectivity**: Header-based configuration with secure credential management
 - ✅ **Serial Communication**: USB Serial debugging
 - ✅ **PSRAM Support**: 8MB external PSRAM detection and testing
-- ✅ **Graphics Demo**: Text rendering and basic shapes
-- ✅ **System Monitoring**: Real-time uptime display
+- ✅ **Graphics Demo**: LVGL Hello World with WiFi status display
+- ✅ **System Monitoring**: Real-time uptime and connection status
 
 ### Display Capabilities
 - 800x480 pixel resolution
@@ -57,10 +67,13 @@ pio device monitor --port COM3 --baud 115200
 ```
 PowerBoard/
 ├── src/
-│   └── main.cpp              # Main application code
+│   ├── main.cpp              # Main application code
+│   └── wifi/                 # WiFi module
+│       ├── README.md         # WiFi setup documentation
+│       ├── wifi_manager.h/cpp # WiFi connection management
+│       └── wifi_config.h     # WiFi credentials (git-ignored)
+├── data/                     # Filesystem data (unused)
 ├── include/                  # Header files
-├── lib/                      # Local libraries  
-├── test/                     # Test files
 ├── .vscode/                  # VS Code configuration
 ├── platformio.ini            # PlatformIO configuration
 ├── CLAUDE.md                 # Development guidelines
