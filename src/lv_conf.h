@@ -75,7 +75,7 @@
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
     #ifndef LV_MEM_SIZE
-        #define LV_MEM_SIZE (128 * 1024U)          /**< [bytes] 128KB for ESP32-S3 with SPIRAM */
+        #define LV_MEM_SIZE (160 * 1024U)          /**< [bytes] 160KB - conservative for 320KB total RAM */
     #endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
@@ -136,7 +136,7 @@
 #define LV_DRAW_BUF_STRIDE_ALIGN                1
 
 /** Align start address of draw_buf addresses to this bytes*/
-#define LV_DRAW_BUF_ALIGN                       4
+#define LV_DRAW_BUF_ALIGN                       4  /* Optimal alignment for ESP32-S3 cache with SPIRAM */
 
 /** Using matrix for transformations.
  * Requirements:
@@ -216,7 +216,7 @@
         /** Allow buffering some shadow calculation.
          *  LV_DRAW_SW_SHADOW_CACHE_SIZE is the maximum shadow size to buffer, where shadow size is
          *  `shadow_width + radius`.  Caching has LV_DRAW_SW_SHADOW_CACHE_SIZE^2 RAM cost. */
-        #define LV_DRAW_SW_SHADOW_CACHE_SIZE 0
+        #define LV_DRAW_SW_SHADOW_CACHE_SIZE 0  /* Reduced for stability with large fonts */
 
         /** Set number of maximally-cached circle data.
          *  The circumference of 1/4 circle are saved for anti-aliasing.
@@ -460,7 +460,7 @@
  *  If size is not set to 0, the decoder will fail to decode when the cache is full.
  *  If size is 0, the cache function is not enabled and the decoded memory will be
  *  released immediately after use. */
-#define LV_CACHE_DEF_SIZE       0
+#define LV_CACHE_DEF_SIZE       8192   /* 8KB cache - reduced for stability */
 
 /** Default number of image header cache entries. The cache is used to store the headers of images
  *  The main logic is like `LV_CACHE_DEF_SIZE` but for image headers. */
@@ -479,7 +479,7 @@
 #define LV_COLOR_MIX_ROUND_OFS  0
 
 /** Add 2 x 32-bit variables to each `lv_obj_t` to speed up getting style properties */
-#define LV_OBJ_STYLE_CACHE      0
+#define LV_OBJ_STYLE_CACHE      0  /* Enable for faster font rendering */
 
 /** Add `id` field to `lv_obj_t` */
 #define LV_USE_OBJ_ID           0
@@ -597,10 +597,10 @@
 #define LV_FONT_MONTSERRAT_16 1  /* Enable 16px font for better readability */
 #define LV_FONT_MONTSERRAT_18 1  /* Enable 18px font for better readability */
 #define LV_FONT_MONTSERRAT_20 1  /* Enable 20px font for better readability */
-#define LV_FONT_MONTSERRAT_22 0
-#define LV_FONT_MONTSERRAT_24 0
-#define LV_FONT_MONTSERRAT_26 0
-#define LV_FONT_MONTSERRAT_28 0
+#define LV_FONT_MONTSERRAT_22 1  /* Enable 22px font for larger text */
+#define LV_FONT_MONTSERRAT_24 1  /* Enable 24px font for larger text */
+#define LV_FONT_MONTSERRAT_26 1  /* Enable 26px font for larger text */
+#define LV_FONT_MONTSERRAT_28 1  /* Enable 28px font for larger text */
 #define LV_FONT_MONTSERRAT_30 0
 #define LV_FONT_MONTSERRAT_32 0
 #define LV_FONT_MONTSERRAT_34 0

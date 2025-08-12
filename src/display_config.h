@@ -76,9 +76,9 @@
 // LVGL Configuration
 // =============================================================================
 
-// Display buffer configuration - optimized for maximum clarity and performance
-#define LVGL_BUFFER_LINES 80    // Increased to 80 lines for maximum clarity
-#define LVGL_DOUBLE_BUFFER true // Enable double buffering to reduce flickering
+// Display buffer configuration - optimized to eliminate screen tearing
+#define LVGL_BUFFER_LINES 120    // Increased to 120 lines to minimize tearing with fewer flushes
+#define LVGL_DOUBLE_BUFFER false // Single buffer to conserve internal RAM
 
 // Buffer size calculations for 24-bit color (3 bytes per pixel)
 #define LVGL_BUFFER_SIZE (PANEL_WIDTH * LVGL_BUFFER_LINES)
