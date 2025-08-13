@@ -3,6 +3,8 @@
 #include <esp_heap_caps.h>
 #include "display_config.h"
 
+// Function declarations
+#include "lvgl_ui.h"
 
 // Create RGB Panel databus and display with auto_flush enabled for stable sync
 Arduino_ESP32RGBPanel *rgbBus = new Arduino_ESP32RGBPanel(
@@ -50,36 +52,16 @@ void setup()
 
   Serial.println("Display test complete!");
 
-  // Draw initial timer value
-  gfx->setTextColor(WHITE, BLACK);
-  gfx->setTextSize(3);
-  gfx->setCursor(100, 100);
-  gfx->print("Timer: 00:00:00");
-  Serial.println("Setup complete! Timer started!");
+  // LVGL setup and UI rendering are now in ui.cpp
+  lvgl_setup(gfx);
+  createUI();
+  Serial.println("Setup complete! Enjoying 40MHz RGB parallel performance!");
 }
-
-
-unsigned long lastUpdate = 0;
-unsigned long startMillis = 0;
-int lastSeconds = -1;
 
 void loop()
 {
-  if (startMillis == 0) startMillis = millis();
-  unsigned long elapsed = (millis() - startMillis) / 1000;
-  if ((int)elapsed != lastSeconds) {
-    lastSeconds = (int)elapsed;
-    int hours = elapsed / 3600;
-    int minutes = (elapsed % 3600) / 60;
-    int seconds = elapsed % 60;
-    char buf[32];
-    sprintf(buf, "Timer: %02d:%02d:%02d", hours, minutes, seconds);
-    // Clear previous timer area
-    gfx->fillRect(100, 100, 300, 40, BLACK);
-    gfx->setTextColor(WHITE, BLACK);
-    gfx->setTextSize(3);
-    gfx->setCursor(100, 100);
-    gfx->print(buf);
-  }
-  delay(10);
+  // Handle LVGL tasks with precise timing to prevent display tearing
+  lvgl_ui_loop();
+  // Minimal delay optimized for 60Hz refresh rate synchronization
+  delay(1); // Very short delay to maintain display synchronization
 }
