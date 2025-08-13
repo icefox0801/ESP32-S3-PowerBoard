@@ -57,27 +57,29 @@
 #define PANEL_HEIGHT 480
 
 // Horizontal timing parameters
-#define HSYNC_POLARITY 0    // Horizontal sync polarity
-#define HSYNC_FRONT_PORCH 8 // Horizontal front porch
-#define HSYNC_PULSE_WIDTH 4 // Horizontal sync pulse width
-#define HSYNC_BACK_PORCH 8  // Horizontal back porch
+#define HSYNC_POLARITY 0 // Horizontal sync polarity
+// Increased porch values for stability
+#define HSYNC_FRONT_PORCH 8 // Horizontal front porch (demo default)
+#define HSYNC_PULSE_WIDTH 4 // Horizontal sync pulse width (demo default)
+#define HSYNC_BACK_PORCH 8  // Horizontal back porch (demo default)
 
 // Vertical timing parameters
-#define VSYNC_POLARITY 0    // Vertical sync polarity
-#define VSYNC_FRONT_PORCH 8 // Vertical front porch
-#define VSYNC_PULSE_WIDTH 4 // Vertical sync pulse width
-#define VSYNC_BACK_PORCH 8  // Vertical back porch
+#define VSYNC_POLARITY 0 // Vertical sync polarity
+// Increased porch values for stability
+#define VSYNC_FRONT_PORCH 8 // Vertical front porch (demo default)
+#define VSYNC_PULSE_WIDTH 4 // Vertical sync pulse width (demo default)
+#define VSYNC_BACK_PORCH 8  // Vertical back porch (demo default)
 
 // Clock configuration
 #define PCLK_ACTIVE_NEG 1     // Pixel clock active negative
-#define PREFER_SPEED 16000000 // Preferred pixel clock speed (16MHz)
+#define PREFER_SPEED 16000000 // Pixel clock 16MHz for faster frame transfer
 
 // =============================================================================
 // LVGL Configuration
 // =============================================================================
 
-// Display buffer configuration - optimized for horizontal sync stability
-#define LVGL_BUFFER_LINES 30    // Smaller buffer to reduce horizontal flickering
+// Display buffer configuration - optimized for display stability
+#define LVGL_BUFFER_LINES 30    // Buffer lines set to 30 for optimal speed and stability
 #define LVGL_DOUBLE_BUFFER true // Enable double buffering to eliminate flickering
 
 // Buffer size calculations for 16-bit color (2 bytes per pixel)
