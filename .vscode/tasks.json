@@ -1,37 +1,37 @@
 {
-	"version": "2.0.0",
-	"tasks": [
-		{
-			"label": "PlatformIO Build",
-			"type": "shell",
-			"command": "platformio run",
-			"group": "build"
-		},
-		{
-			"label": "PlatformIO Build",
-			"type": "shell",
-			"command": "platformio",
-			"args": [
-				"run"
-			],
-			"isBackground": false,
-			"problemMatcher": [
-				"$platformio"
-			],
-			"group": "build"
-		},
-		{
-			"label": "PlatformIO Build Fixed",
-			"type": "shell",
-			"command": "C:\\Users\\icefo\\.platformio\\penv\\Scripts\\platformio.exe",
-			"args": [
-				"run"
-			],
-			"isBackground": false,
-			"problemMatcher": [
-				"$platformio"
-			],
-			"group": "build"
-		}
-	]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "PlatformIO Build",
+      "type": "shell",
+      "command": "platformio run",
+      "group": "build"
+    },
+    {
+      "label": "PlatformIO Build",
+      "type": "shell",
+      "command": "platformio",
+      "args": [
+        "run"
+      ],
+      "isBackground": false,
+      "problemMatcher": [
+        "$platformio"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "PlatformIO Build Fixed",
+      "type": "shell",
+      "command": "C:\\Users\\icefo\\.platformio\\penv\\Scripts\\platformio.exe",
+      "args": [
+        "run"
+      ],
+      "isBackground": false,
+      "problemMatcher": [
+        "$platformio"
+      ],
+      "group": "build"
+    }
+  ]
 }
